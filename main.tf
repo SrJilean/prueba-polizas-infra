@@ -77,13 +77,13 @@ resource "aws_security_group" "db_sg" {
 resource "aws_db_instance" "polizas_db" {
   identifier             = "polizas-db"
   engine                 = "postgres"
-  engine_version         = "15.4"
+  engine_version         = "15" # AWS elegirá la versión menor correcta automáticamente
   instance_class         = "db.t3.micro"
   allocated_storage      = 20
   db_name                = "polizasdb"
   username               = "adminpolizas"
-  password               = "PruebaTecnica2026!" # Contraseña segura obligatoria
+  password               = "PruebaTecnica2026!" 
   skip_final_snapshot    = true
-  publicly_accessible    = true # Vital para que tu Spring Boot local la alcance
+  publicly_accessible    = true 
   vpc_security_group_ids = [aws_security_group.db_sg.id]
 }
