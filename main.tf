@@ -16,7 +16,7 @@ resource "aws_sqs_queue" "core_mock_queue" {
 variable "backend_url" {
   description = "URL de tu backend (ej. URL de ngrok para desarrollo local)"
   type        = string
-  default     = "http://localhost:8080"
+  default     = "http://example.com" # URL temporal válida para pasar la validación de AWS
 }
 
 # 3. Creación del API Gateway proxy
