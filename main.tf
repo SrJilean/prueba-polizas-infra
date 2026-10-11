@@ -3,13 +3,13 @@
 # ==========================================
 resource "aws_security_group" "db_sg" {
   name        = "polizas_db_sg"
-  description = "Permitir conexion a PostgreSQL"
+  description = "Permitir conexion a PostgreSQL desde tu Mac"
 
   ingress {
     from_port   = 5432
     to_port     = 5432
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Permite conexión desde EB y desde tu Mac
+    cidr_blocks = ["0.0.0.0/0"] 
   }
 
   egress {
@@ -119,10 +119,10 @@ resource "aws_apigatewayv2_api" "api_gateway" {
   }
 }
 
-resource "aws_apigatewayv2_integration" "eb_integration" {
+resource "aws_apigatewayv2_integration" "backend_integration" {
   api_id             = aws_apigatewayv2_api.api_gateway.id
   integration_type   = "HTTP_PROXY"
-  # Apuntamos dinámicamente a la URL del backend recién creado
+  # Apuntamos dinámicamente a la URL del backend recién creado en EB
   integration_uri    = "http://${aws_elastic_beanstalk_environment.polizas_env.cname}" 
   integration_method = "ANY"
 }
@@ -130,7 +130,7 @@ resource "aws_apigatewayv2_integration" "eb_integration" {
 resource "aws_apigatewayv2_route" "default_route" {
   api_id    = aws_apigatewayv2_api.api_gateway.id
   route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.eb_integration.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.backend_integration.id}"
 }
 
 resource "aws_apigatewayv2_stage" "default_stage" {
