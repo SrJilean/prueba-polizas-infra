@@ -1,25 +1,113 @@
-# 1. La cola SQS que ya creamos
-resource "aws_sqs_queue" "core_mock_queue" {
-  name                      = "core-mock-event-queue"
-  delay_seconds             = 0
-  max_message_size          = 262144
-  message_retention_seconds = 86400
-  receive_wait_time_seconds = 0
+# ==========================================
+# 1. BASE DE DATOS (RDS PostgreSQL)
+# ==========================================
+resource "aws_security_group" "db_sg" {
+  name        = "polizas_db_sg"
+  description = "Permitir conexion a PostgreSQL"
 
-  tags = {
-    Environment = "Test-Modulo2"
-    Project     = var.project_name
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Permite conexión desde EB y desde tu Mac
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 
-# 2. Variable temporal para enlazar el API Gateway con tu Spring Boot local
-variable "backend_url" {
-  description = "URL de tu backend (ej. URL de ngrok para desarrollo local)"
-  type        = string
-  default     = "http://example.com" # URL temporal válida para pasar la validación de AWS
+resource "aws_db_instance" "polizas_db" {
+  identifier             = "polizas-db"
+  engine                 = "postgres"
+  engine_version         = "15"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  db_name                = "polizasdb"
+  username               = "adminpolizas"
+  password               = "PruebaTecnica2026!" 
+  skip_final_snapshot    = true
+  publicly_accessible    = true 
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
 }
 
-# 3. Creación del API Gateway proxy
+# ==========================================
+# 2. BACKEND (AWS Elastic Beanstalk)
+# ==========================================
+# Rol necesario para que EC2 corra Beanstalk
+resource "aws_iam_role" "eb_ec2_role" {
+  name = "eb_ec2_role_polizas"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "eb_web_tier" {
+  role       = aws_iam_role.eb_ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier"
+}
+
+resource "aws_iam_instance_profile" "eb_ec2_profile" {
+  name = "eb_ec2_profile_polizas"
+  role = aws_iam_role.eb_ec2_role.name
+}
+
+# Aplicación y Entorno Java
+resource "aws_elastic_beanstalk_application" "polizas_app" {
+  name = "plataforma-polizas"
+}
+
+resource "aws_elastic_beanstalk_environment" "polizas_env" {
+  name                = "plataforma-polizas-env"
+  application         = aws_elastic_beanstalk_application.polizas_app.name
+  solution_stack_name = "64bit Amazon Linux 2023 v4.2.1 running Corretto 17" # Entorno Java 17
+
+  setting {
+    namespace = "aws:autoscaling:launchconfiguration"
+    name      = "IamInstanceProfile"
+    value     = aws_iam_instance_profile.eb_ec2_profile.name
+  }
+
+  setting {
+    namespace = "aws:autoscaling:launchconfiguration"
+    name      = "InstanceType"
+    value     = "t3.micro"
+  }
+
+  # Variables de entorno inyectadas al Spring Boot
+  setting {
+    namespace = "aws:elasticbeanstalk:application:environment"
+    name      = "SPRING_DATASOURCE_URL"
+    value     = "jdbc:postgresql://${aws_db_instance.polizas_db.endpoint}/${aws_db_instance.polizas_db.db_name}"
+  }
+  setting {
+    namespace = "aws:elasticbeanstalk:application:environment"
+    name      = "SPRING_DATASOURCE_USERNAME"
+    value     = aws_db_instance.polizas_db.username
+  }
+  setting {
+    namespace = "aws:elasticbeanstalk:application:environment"
+    name      = "SPRING_DATASOURCE_PASSWORD"
+    value     = aws_db_instance.polizas_db.password
+  }
+  setting {
+    namespace = "aws:elasticbeanstalk:application:environment"
+    name      = "SERVER_PORT"
+    value     = "5000" # Beanstalk espera tráfico en el puerto 5000 por defecto
+  }
+}
+
+# ==========================================
+# 3. API GATEWAY (Apuntando al Backend)
+# ==========================================
 resource "aws_apigatewayv2_api" "api_gateway" {
   name          = "polizas-api-gateway"
   protocol_type = "HTTP"
@@ -31,59 +119,30 @@ resource "aws_apigatewayv2_api" "api_gateway" {
   }
 }
 
-# 4. Integración: Hacia dónde envía el tráfico el API Gateway
-resource "aws_apigatewayv2_integration" "backend_integration" {
+resource "aws_apigatewayv2_integration" "eb_integration" {
   api_id             = aws_apigatewayv2_api.api_gateway.id
   integration_type   = "HTTP_PROXY"
-  integration_uri    = var.backend_url # Se eliminó el "/{proxy}"
+  # Apuntamos dinámicamente a la URL del backend recién creado
+  integration_uri    = "http://${aws_elastic_beanstalk_environment.polizas_env.cname}" 
   integration_method = "ANY"
 }
 
-# 5. Ruta: Atrapa cualquier endpoint
 resource "aws_apigatewayv2_route" "default_route" {
   api_id    = aws_apigatewayv2_api.api_gateway.id
   route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.backend_integration.id}"
+  target    = "integrations/${aws_apigatewayv2_integration.eb_integration.id}"
 }
 
-# 6. Despliegue automático
 resource "aws_apigatewayv2_stage" "default_stage" {
   api_id      = aws_apigatewayv2_api.api_gateway.id
   name        = "$default"
   auto_deploy = true
 }
 
-# 7. Grupo de Seguridad para la Base de Datos
-resource "aws_security_group" "db_sg" {
-  name        = "polizas_db_sg"
-  description = "Permitir conexion a PostgreSQL desde tu Mac"
-
-  ingress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # Para la prueba, permitimos conexión desde cualquier IP
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+# Outputs para que sepas a dónde pegarle al final
+output "api_gateway_url" {
+  value = aws_apigatewayv2_stage.default_stage.invoke_url
 }
-
-# 8. Base de Datos RDS (PostgreSQL - Capa Gratuita)
-resource "aws_db_instance" "polizas_db" {
-  identifier             = "polizas-db"
-  engine                 = "postgres"
-  engine_version         = "15" # AWS elegirá la versión menor correcta automáticamente
-  instance_class         = "db.t3.micro"
-  allocated_storage      = 20
-  db_name                = "polizasdb"
-  username               = "adminpolizas"
-  password               = "PruebaTecnica2026!" 
-  skip_final_snapshot    = true
-  publicly_accessible    = true 
-  vpc_security_group_ids = [aws_security_group.db_sg.id]
+output "rds_endpoint" {
+  value = aws_db_instance.polizas_db.endpoint
 }
