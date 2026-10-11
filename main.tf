@@ -138,11 +138,3 @@ resource "aws_apigatewayv2_stage" "default_stage" {
   name        = "$default"
   auto_deploy = true
 }
-
-# Outputs para que sepas a dónde pegarle al final
-output "api_gateway_url" {
-  value = aws_apigatewayv2_stage.default_stage.invoke_url
-}
-output "rds_endpoint" {
-  value = aws_db_instance.polizas_db.endpoint
-}
